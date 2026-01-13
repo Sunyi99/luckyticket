@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>双色球智能分析与推荐工具</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", sans-serif;
+      max-width: 900px;
+      margin: 20px auto;
+      padding: 20px;
+      background-color: #f9f9f9;
+    }
+    h1 {
+      text-align: center;
+      color: #d32f2f;
+    }
+    textarea {
+      width: 100%;
+      height: 120px;
+      margin: 8px 0;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 10px 0;
+    }
+    button {
+      background-color: #1976d2;
+      color: white;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 15px;
+    }
+    button:hover {
+      background-color: #1565c0;
+    }
+    button#recommendBtn {
+      background-color: #388e3c;
+    }
+    button#recommendBtn:hover {
+      background-color: #2e7d32;
+    }
+    .result {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 12px;
+      margin: 10px 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .best {
+      background-color: #e8f5e9;
+      border-left: 4px solid #4caf50;
+    }
+    .recommend-section {
+      background: #e3f2fd;
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    pre {
+      background: #f1f1f1;
+      padding: 8px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    .label {
+      font-weight: bold;
+      margin-top: 15px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+
+<h1>🎯 双色球智能分析与推荐工具</h1>
+
+<div class="label">📌 你的投注号码（每行一组，格式：02 09 15 18 24 29 + 06）</div>
+<textarea id="myTickets" placeholder="例如：
+02 09 15 18 24 29 + 06
+05 11 13 22 27 31 + 14"></textarea>
+
+<div class="label">📅 历史开奖数据（至少20期，用于分析）</div>
+<textarea id="historyData" placeholder="从彩票网站复制历史开奖数据..."></textarea>
+
+<div class="btn-group">
+  <button onclick="analyze()">🔍 分析我的号码</button>
+  <button id="recommendBtn" onclick="generateSmartCombos()">✨ 智能推荐高评分组合</button>
+</div>
+
+<div id="output"></div>
+
+<script>
+// ========== 公共解析函数 ==========
+function parseLines(text) {
+  const lines = text.trim().split('\n').filter(line => line.trim());
+  const pattern = /(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,1})\s+(\d{1,2})\s*\+\s*(\d{1,2})/;
+  const result = [];
+  for (const line of lines) {
+    const match = line.match(/(\d{1,2})/g);
+    if (match && match.length >= 7) {
+      const nums = match.slice(0, 6).map(x => parseInt(x, 10));
+      const blue = parseInt(match[6], 10);
+      if (nums.every(n => n >= 1 && n <= 33) && blue >= 1 && blue <= 16) {
+        const unique = [...new Set(nums)];
+        if (unique.length === 6) {
+          result.push({ reds: unique.sort((a,b)=>a-b), blue });
+        }
+      }
+    }
+  }
+  return result;
+}
+
+// ========== 评分函数 ==========
+function scoreTicket(ticket, history) {
+  const reds = ticket.reds;
+  const blue = ticket.blue;
+
+  const oddCount = reds.filter(x => x % 2 === 1).length;
+  const small = reds.filter(x => x <= 17).length;
+  const zone1 = reds.filter(x => x >= 1 && x <= 11).length;
+  const zone2 = reds.filter(x => x >= 12 && x <= 22).length;
+  const zone3 = reds.filter(x => x >= 23 && x <= 33).length;
+
+  let totalRedMatch = 0, totalBlueMatch = 0;
+  if (history && history.length > 0) {
+    for (const h of history) {
+      totalRedMatch += reds.filter(r => h.reds.includes(r)).length;
+      if (blue === h.blue) totalBlueMatch++;
+    }
+  }
+
+  const avgRedMatch = history?.length ? (totalRedMatch / history.length) : 0;
+  const blueHitRate = history?.length ? (totalBlueMatch / history.length) : 0;
+
+  let score = 0;
+  if ([2,3,4].includes(oddCount)) score += 10;
+  if ([2,3,4].includes(small)) score += 10;
+  if (zone1 >= 1 && zone2 >= 1 && zone3 >= 1) score += 15;
+  score += Math.min(avgRedMatch * 8, 20);
+  score += Math.min(blueHitRate * 100 * 0.15, 15); // 蓝球最多15分
+
+  return {
+    ...ticket,
+    oddCount, evenCount: 6 - oddCount,
+    small, large: 6 - small,
+    zone1, zone2, zone3,
+    avgRedMatch: avgRedMatch.toFixed(2),
+    blueHitRate: (blueHitRate * 100).toFixed(1),
+    score: parseFloat(score.toFixed(1))
+  };
+}
+
+// ========== 随机生成合规红球 ==========
+function generateReds() {
+  const reds = new Set();
+  while (reds.size < 6) {
+    reds.add(Math.floor(Math.random() * 33) + 1);
+  }
+  return Array.from(reds).sort((a, b) => a - b);
+}
+
+// ========== 生成智能组合 ==========
+function generateSmartCombos() {
+  const historyText = document.getElementById('historyData').value;
+  const history = parseLines(historyText);
+  const hasHistory = history && history.length >= 10; // 至少10期才启用历史匹配
+
+  // 动态设定阈值
+  const threshold = hasHistory ? 50 : 40;
+
+  // 收集所有红球和蓝球频率（用于加权）
+  let redFreq = {};
+  let blueFreq = {};
+  if (hasHistory) {
+    for (const h of history) {
+      for (const r of h.reds) redFreq[r] = (redFreq[r] || 0) + 1;
+      blueFreq[h.blue] = (blueFreq[h.blue] || 0) + 1;
+    }
+  }
+
+  // 构造高概率红球池（热号 + 均匀分布）
+  function generateStructuredReds() {
+    const reds = new Set();
+
+    // 强制每个区间选1～3个
+    const zones = [
+      Array.from({length:11}, (_,i)=>i+1),      // 1-11
+      Array.from({length:11}, (_,i)=>i+12),     // 12-22
+      Array.from({length:11}, (_,i)=>i+23)      // 23-33
+    ];
+
+    // 每个区间至少选1个，最多3个，总共6个
+    let counts = [1,1,1];
+    let remaining = 3;
+    while (remaining > 0) {
+      const idx = Math.floor(Math.random() * 3);
+      if (counts[idx] < 3) {
+        counts[idx]++;
+        remaining--;
+      }
+    }
+
+    // 从每个区间按频率或随机选
+    for (let z = 0; z < 3; z++) {
+      const pool = [...zones[z]];
+      // 如果有历史，优先选高频号
+      if (hasHistory) {
+        pool.sort((a,b) => (blueFreq[b] || 0) - (blueFreq[a] || 0));
+      }
+      for (let i = 0; i < counts[z]; i++) {
+        let candidate;
+        do {
+          candidate = pool[Math.floor(Math.random() * Math.min(5, pool.length))];
+        } while (reds.has(candidate));
+        reds.add(candidate);
+      }
+    }
+
+    return Array.from(reds).sort((a,b)=>a-b);
+  }
+
+  const candidates = [];
+  const maxAttempts = 500;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const reds = generateStructuredReds();
+    // 蓝球：优先选历史高频，否则随机
+    let blue;
+    if (hasHistory && Object.keys(blueFreq).length > 0) {
+      const sortedBlues = Object.entries(blueFreq).sort((a,b)=>b[1]-a[1]).slice(0,8).map(x=>x[0]);
+      blue = parseInt(sortedBlues[Math.floor(Math.random()*sortedBlues.length)]);
+    } else {
+      blue = Math.floor(Math.random() * 16) + 1;
+    }
+
+    const ticket = { reds, blue };
+    const scored = scoreTicket(ticket, hasHistory ? history : null);
+    if (scored.score >= threshold) {
+      candidates.push(scored);
+    }
+    if (candidates.length >= 10) break;
+  }
+
+  if (candidates.length === 0) {
+    // 最后手段：放宽条件，返回最高分的3组
+    const fallback = [];
+    for (let i = 0; i < 200; i++) {
+      const reds = generateStructuredReds();
+      const blue = Math.floor(Math.random() * 16) + 1;
+      fallback.push(scoreTicket({reds, blue}, hasHistory ? history : null));
+    }
+    fallback.sort((a,b)=>b.score-a.score);
+    candidates.push(...fallback.slice(0,3));
+  }
+
+  // 取前3
+  const top3 = candidates.slice(0, 3).sort((a,b)=>b.score-a.score);
+
+  let html = `<div class="recommend-section"><h3>🌟 智能推荐组合（评分 ≥${threshold}）</h3>`;
+  top3.forEach((res, i) => {
+    const fmtReds = res.reds.map(n => n.toString().padStart(2, '0')).join(' ');
+    const fmtBlue = res.blue.toString().padStart(2, '0');
+    html += `
+      <div class="result best">
+        <strong>推荐 ${i+1}（评分: ${res.score}/70）</strong><br>
+        ${fmtReds} + ${fmtBlue}<br>
+        奇偶:${res.oddCount}:${res.evenCount} | 大小:${res.small}:${res.large} | 区间:${res.zone1}-${res.zone2}-${res.zone3}
+      </div>
+    `;
+  });
+  html += `</div>`;
+
+  document.getElementById('output').innerHTML = html;
+}
+
+// ========== 分析用户输入 ==========
+function formatNums(nums) {
+  return nums.map(n => n.toString().padStart(2, '0')).join(' ');
+}
+
+function analyze() {
+  const myText = document.getElementById('myTickets').value;
+  const histText = document.getElementById('historyData').value;
+
+  const myTickets = parseLines(myText);
+  const history = parseLines(histText);
+
+  if (myTickets.length === 0) {
+    alert("请正确输入你的投注号码！");
+    return;
+  }
+
+  const results = myTickets.map(t => scoreTicket(t, history));
+  const bestScore = Math.max(...results.map(r => r.score));
+  
+  let html = `<h2>📊 你的号码分析结果（共 ${results.length} 组）</h2>`;
+  results.forEach((res, i) => {
+    const isBest = res.score === bestScore;
+    html += `
+      <div class="result ${isBest ? 'best' : ''}">
+        <strong>【第${i+1}组】</strong><br>
+        号码: ${formatNums(res.reds)} + ${res.blue.toString().padStart(2, '0')}<br>
+        奇偶比: ${res.oddCount}:${res.evenCount} | 大小比: ${res.small}:${res.large}<br>
+        区间分布: ${res.zone1}-${res.zone2}-${res.zone3}（理想：2-2-2）<br>
+        平均红球重合数: ${res.avgRedMatch} | 蓝球命中率: ${res.blueHitRate}%<br>
+        ⭐ 综合评分: <strong>${res.score}/70</strong>
+      </div>
+    `;
+  });
+
+  document.getElementById('output').innerHTML = html;
+}
+</script>
+
+</body>
+</html>
